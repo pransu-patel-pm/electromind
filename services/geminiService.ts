@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { ProjectIdea } from "../types";
+import { ProjectIdea, ComponentData } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
@@ -11,11 +11,6 @@ export const sendMessageToGemini = async (
 ) => {
   try {
     const modelId = useSearch ? 'gemini-3-pro-preview' : 'gemini-3-flash-preview';
-    
-    // Convert generic history to Gemini format if needed, 
-    // but the SDK handles history via Chat object usually. 
-    // Here we'll do single turn or manual history management for simplicity in this service function
-    // or use the chat API. Let's use the Chat API.
     
     const chat = ai.chats.create({
       model: modelId,
@@ -45,6 +40,84 @@ export const sendMessageToGemini = async (
   } catch (error) {
     console.error("Gemini API Error:", error);
     throw error;
+  }
+};
+
+// Generate Image
+export const generateImage = async (prompt: string): Promise<string | null> => {
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: {
+        parts: [{ text: prompt }]
+      },
+      config: {
+        imageConfig: {
+          aspectRatio: "4:3",
+        }
+      }
+    });
+    
+    for (const part of response.candidates?.[0]?.content?.parts || []) {
+      if (part.inlineData) {
+        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      }
+    }
+    return null;
+  } catch (error) {
+    console.error("Image Gen Error:", error);
+    return null;
+  }
+};
+
+// Component Details
+export const getComponentDetails = async (componentName: string): Promise<ComponentData | null> => {
+  try {
+      const textPrompt = `Provide technical details for the electronic component "${componentName}". Return JSON only.`;
+      
+      const textPromise = ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: textPrompt,
+          config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                  type: Type.OBJECT,
+                  properties: {
+                      name: { type: Type.STRING },
+                      description: { type: Type.STRING },
+                      specs: { 
+                        type: Type.ARRAY,
+                        items: {
+                          type: Type.OBJECT,
+                          properties: {
+                             param: { type: Type.STRING },
+                             value: { type: Type.STRING }
+                          }
+                        } 
+                      },
+                      pinout: { type: Type.STRING, description: "Text description of pin configuration" }
+                  },
+                  required: ["name", "description", "specs", "pinout"]
+              }
+          }
+      });
+
+      const imagePromise = generateImage(`A clean, realistic, white background product photo of the electronic component: ${componentName}, high quality, macro photography`);
+
+      const [textResponse, imageUrl] = await Promise.all([textPromise, imagePromise]);
+      
+      if (textResponse.text) {
+          const data = JSON.parse(textResponse.text);
+          return {
+              ...data,
+              imageUrl: imageUrl || undefined
+          };
+      }
+      return null;
+
+  } catch (e) {
+      console.error(e);
+      return null;
   }
 };
 
